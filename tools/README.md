@@ -19,6 +19,7 @@ serve, and lists what the loop has taught so far.
 | `repair_install.py` | Make an installed folder match its package again. |
 | `install_package.py` | Put a built package into a profile folder for testing. |
 | `check_config_names.py` | Are the setting names already PascalCase? Opt-in: `CHECK_CONFIG_NAMES=1`. |
+| `server.py` | Deploy packages to the dedicated server, restart it, and check what its launch loaded. |
 | `build.sh` | Build one mod in `compile`, `debug` or `release` mode, gated on the real result. |
 | `preflight.sh` | Every check above that needs no launch, for one repo. |
 
@@ -118,6 +119,28 @@ where a Debug build will copy, then checks that path against the profile Gale
 launches and the plugin folders that hold a live copy of the DLL: `MANAGER`,
 `INACTIVE`, `NO FOLDER`, `STALE`, `DUPLICATE`, `DISABLED`. The template fixes and
 the state of every repo on 2026-09-12 are in `../docs/local-testing.md`.
+
+## server.py
+
+Talks to the dedicated server through the Winternode WISP panel's client API.
+`deploy` is a dry run until `--apply`. With it, the tool stops the server, uploads
+the package, and compares every file's bytes on the server with the package. It then
+starts the server and waits for a `Game server connected` line stamped after the
+start signal, and runs `check_log.py --server` for each plugin. `check_log.py
+--server` skips the client checks that make no sense on a server.
+
+Validated read-only against the live server on 2026-09-12:
+
+- `status`, `log`, and a dry-run `deploy` of OttoBifrost 1.3.0 pass.
+- A downgrade, a package missing `icon.png`, a misnamed zip, and a bad key are each
+  refused with exit 1.
+- On a copy of the server log, `check_log.py --server` reports `VERSION`, `ERROR` and
+  `NOT LOADED` for an injected wrong version, a mod error and a missing mod.
+
+Uploads, overwrites, nested directories, deletes and download hashes were exercised
+in a scratch directory on the server. The power signals, and so `--apply`, `restart`,
+`start` and `stop`, have not run yet. `../docs/server.md` has the workflow and what
+the API really does.
 
 ## check_config_names.py
 

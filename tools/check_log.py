@@ -18,8 +18,12 @@ Notes:
   RUNNING     the game is still running, so the log is not finished
 
 Usage: check_log.py <plugin name> [--log FILE] [--expect VERSION] [--archive DIR]
+                    [--server]
        <plugin name> is the name in BepInPlugin, as the log prints it: OttoAura,
        Ottomation.ModLib. --log defaults to the active Gale profile's log.
+       --server reads a dedicated server's log, given with --log. A server has no
+       ServerSync handshake and no local game, so RECEIVED, SERVER and RUNNING are
+       skipped.
 """
 import argparse
 import datetime
@@ -59,7 +63,10 @@ def main():
     parser.add_argument("--log", default=None)
     parser.add_argument("--expect", default=None)
     parser.add_argument("--archive", default=None)
+    parser.add_argument("--server", action="store_true")
     args = parser.parse_args()
+    if args.server and not args.log:
+        parser.error("--server needs --log, the server's LogOutput.log")
     log = args.log or default_log()
 
     if not os.path.exists(log):
@@ -73,7 +80,7 @@ def main():
     problems = []
     notes = []
 
-    if gale.game_running():
+    if not args.server and gale.game_running():
         notes.append(("RUNNING", "Valheim is running, so the log is still being written"))
 
     loaded = None
@@ -102,7 +109,9 @@ def main():
         if args.expect and loaded != args.expect:
             problems.append(("VERSION", "loaded %s, expected %s" % (loaded, args.expect)))
 
-    if received:
+    if args.server:
+        pass
+    elif received:
         notes.append(("RECEIVED", "server runs %s, minimum %s" % received))
         if loaded and received[0] != loaded:
             problems.append(("SERVER", "client loaded %s, server runs %s"
