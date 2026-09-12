@@ -15,8 +15,8 @@ produces.
 
 ```
 PROFILE=/mnt/c/Users/paulo/AppData/Roaming/com.kesomannen.gale/valheim/profiles/Default
-tools/check_deploy.py ../OttoStash
+python3 tools/check_deploy.py ../OttoStash
 tools/build.sh ../OttoStash debug
-tools/check_log.py OttoStash
+python3 tools/check_log.py OttoStash
 tools/preflight.sh ../OttoStash "$PROFILE/BepInEx/plugins/potto007-OttoStash"
 ```

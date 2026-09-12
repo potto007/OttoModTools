@@ -14,20 +14,20 @@ PROFILE=/mnt/c/Users/paulo/AppData/Roaming/com.kesomannen.gale/valheim/profiles/
 
 ## The loop
 
-1. **Where will the build go?** `$TOOLS/check_deploy.py ../OttoX`. It asks MSBuild
+1. **Where will the build go?** `python3 $TOOLS/check_deploy.py ../OttoX`. It asks MSBuild
    for the resolved paths, then compares them with the profile Gale launches and
    with the plugin folders that really hold the DLL.
 2. **Compile only**, leaving the profile untouched: `$TOOLS/build.sh ../OttoX compile`.
-3. **After a game update**, before launching: `$TOOLS/check_harmony.py ../OttoX`.
+3. **After a game update**, before launching: `python3 $TOOLS/check_harmony.py ../OttoX`.
 4. **Debug into the profile.** Quit Valheim first, then `$TOOLS/build.sh ../OttoX debug`.
    Only the DLL changes. The folder's `manifest.json` and Gale's own records keep
    the old version, so Gale shows one version while the new code runs.
 5. **Launch from Gale** and play the change. None of these tools start the game.
 6. **After quitting**, read the launch before the next one overwrites it:
-   `$TOOLS/check_log.py OttoX --expect 1.2.0 --archive ~/valheim-logs`.
+   `python3 $TOOLS/check_log.py OttoX --expect 1.2.0 --archive ~/valheim-logs`.
 7. **Release.** `$TOOLS/build.sh ../OttoX release`, then `$TOOLS/preflight.sh ../OttoX`.
 8. **Test the Release zip in the profile**:
-   `$TOOLS/install_package.py ../OttoX/Thunderstore/potto007-OttoX-1.2.0.zip "$PROFILE/BepInEx/plugins/potto007-OttoX"`,
+   `python3 $TOOLS/install_package.py ../OttoX/Thunderstore/potto007-OttoX-1.2.0.zip "$PROFILE/BepInEx/plugins/potto007-OttoX"`,
    then again with `--apply`, then launch and run `check_log.py` again.
 
 Gate commits and scripts on the exit code of `build.sh` and the harnesses. Each one

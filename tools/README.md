@@ -157,7 +157,7 @@ PROFILE=/mnt/c/Users/paulo/AppData/Roaming/com.kesomannen.gale/valheim/profiles/
 tools/build.sh ../OttoUI release
 tools/preflight.sh ../OttoUI
 tools/preflight.sh ../OttoUI "$PROFILE/BepInEx/plugins/potto007-OttoUI"
-tools/check_log.py OttoUI --expect 1.2.0
+python3 tools/check_log.py OttoUI --expect 1.2.0
 ```
 
 `verify_package.py` also runs inside every Release build. In a worktree the current

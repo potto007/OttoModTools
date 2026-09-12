@@ -8,11 +8,11 @@ the panel's client API.
 
 ```
 TOOLS=~/src/valheim/mods/OttoModTools/tools
-$TOOLS/server.py status
-$TOOLS/server.py deploy ../OttoBifrost/Thunderstore/potto007-OttoBifrost-1.3.0.zip
-$TOOLS/server.py deploy ../OttoBifrost/Thunderstore/potto007-OttoBifrost-1.3.0.zip --apply
-$TOOLS/server.py restart
-$TOOLS/server.py log --archive ~/valheim-logs/server
+python3 $TOOLS/server.py status
+python3 $TOOLS/server.py deploy ../OttoBifrost/Thunderstore/potto007-OttoBifrost-1.3.0.zip
+python3 $TOOLS/server.py deploy ../OttoBifrost/Thunderstore/potto007-OttoBifrost-1.3.0.zip --apply
+python3 $TOOLS/server.py restart
+python3 $TOOLS/server.py log --archive ~/valheim-logs/server
 ```
 
 ## The workflow
