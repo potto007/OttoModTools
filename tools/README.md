@@ -4,14 +4,33 @@ Each harness is validated against a deliberately broken input before it is
 trusted. A clean run means the check ran and found nothing, which is not the same
 as the tree being correct.
 
+`../docs/local-testing.md` walks the build, install, launch and log loop these
+serve, and lists what the loop has taught so far.
+
 | Script | Answers |
 | --- | --- |
 | `verify_package.py` | Is this zip shippable? |
 | `verify_install.py` | Does the installed folder match the package it claims to be? |
 | `check_enums.py` | Did the decompile resolve an enum constant to the wrong member? |
+| `check_harmony.py` | Does every Harmony patch target exist in the game installed now? |
+| `check_template.py` | Can the build template skip a safeguard without saying so? |
+| `check_deploy.py` | Will a Debug build land in the folder the game loads, and only there? |
+| `check_log.py` | What did the last launch say about this mod? |
 | `repair_install.py` | Make an installed folder match its package again. |
+| `install_package.py` | Put a built package into a profile folder for testing. |
 | `check_config_names.py` | Are the setting names already PascalCase? Opt-in: `CHECK_CONFIG_NAMES=1`. |
-| `preflight.sh` | All of the above, for one repo. |
+| `build.sh` | Build one mod in `compile`, `debug` or `release` mode, gated on the real result. |
+| `preflight.sh` | Every check above that needs no launch, for one repo. |
+
+`gale.py` holds what several of them need: Gale's paths, its active profile, whether
+Valheim is running, and the version a plugin DLL declares.
+
+## Writing into a profile
+
+Gale installs package files as hard links into its cache, shared by every profile
+holding that version. Every tool here that writes into a profile unlinks a file
+before writing it, and a build target must do the same (ADR-0001).
+`repair_install.py` wrote through the links until 2026-09-12.
 
 ## repair_install.py
 
@@ -24,6 +43,13 @@ The records stay true because the version does not change. Only the layout does.
 
 Run it without `--apply` first: it reports what it would do and changes nothing.
 
+## install_package.py
+
+The same writes as `repair_install.py`, for a version the profile does not hold
+yet. It refuses while Valheim runs, then runs `verify_install.py` and reports any
+other plugin folder with a live copy of the same DLL. Gale's records keep the
+version Gale installed, so `check_log.py` is how to see what loaded.
+
 ## verify_install.py
 
 The check that was missing. A package can be correct and the install still wrong,
@@ -31,15 +57,18 @@ because other processes write into that folder: a build target, a hand copy, or
 the mod manager reconciling against its own stored file list.
 
 It reports the shape of the failure, not just a mismatch: `MISSING`, `FLATTENED`,
-`CONTENT`, `DISABLED`, `EXTRA`.
+`CONTENT`, `DISABLED`, `EXTRA`. Notes that do not fail the folder: `LINKED` for hard
+links, `FOREIGN` for an r2modman record left in a Gale profile, and `SWAPPED` with
+`--debug-dll`, where a Debug build replaced the DLL and the manifest still names
+the packaged version.
 
 `FLATTENED` exists because of a real failure. r2modman re-enabled OttoUI and moved
 `Translations/<Language>/*.json` to the folder root. Jotunn reads only the tree,
 so every translation silently stopped loading. The package was correct throughout.
 
-r2modman was the mod manager then. Gale replaced it, and it is not yet known
-whether Gale flattens the same way. The checks do not depend on the manager: Gale
-also disables a mod by renaming its files to `*.old`, and installs imported from
+Gale does the same. On 2026-09-12 its Default profile held a local import of
+Ottomation_ModLib 1.17.0 with both translation files at the folder root. Gale also
+disables a mod by renaming its files to `*.old`, and installs imported from
 r2modman can still carry `mm_v2_manifest.json`.
 
 ## check_enums.py
@@ -67,21 +96,53 @@ reason is what lets the next reader trust the skip. OttoStash carries one, on a
 `GlobalKeys.TeleportAll` check that matches vanilla `InventoryGrid.cs` word for word and
 trips the heuristic only because `m_foodStamina` sits two lines below it.
 
+## check_harmony.py
+
+A game update that changes a patched method's signature compiles cleanly and throws
+"Undefined target method" inside `PatchAll` at launch, which also skips the patches
+after it. The harness reads each `[HarmonyPatch]` attribute, `#if DEBUG` code
+included, and looks the target up in the decompiled game assemblies: `MISSING` for
+no such method, `SIGNATURE` for no overload with exactly the listed argument types.
+
+Validated against OttoAura's Debug-only `GetTooltip` patch, which listed four
+argument types after the 2026-09-11 update gave the method six. The fixed patch in
+OttoAura's `auraboost` worktree passes, and so does every other mod repo. Targets
+outside the game assemblies, constructors and types named by string are counted as
+`SKIP`, never as a pass.
+
+## check_template.py and check_deploy.py
+
+`check_template.py` reads the `.csproj` for the faults that let a safeguard skip
+itself: `IN-PLACE`, `SILENT`, `WORKTREE`, `UNCHECKED`. `check_deploy.py` asks MSBuild
+where a Debug build will copy, then checks that path against the profile Gale
+launches and the plugin folders that hold a live copy of the DLL: `MANAGER`,
+`INACTIVE`, `NO FOLDER`, `STALE`, `DUPLICATE`, `DISABLED`. The template fixes and
+the state of every repo on 2026-09-12 are in `../docs/local-testing.md`.
+
+## check_config_names.py
+
+A run that sees no bind call site fails with `NOTHING CHECKED`. OttoBifrost binds
+with section constants and `BindSynced`, which the check did not match, and it once
+printed a clean verdict over zero sites.
+
 ## Usage
 
 `$PROFILE` is the Gale profile the game loads, `Default`:
 
 ```
 PROFILE=/mnt/c/Users/paulo/AppData/Roaming/com.kesomannen.gale/valheim/profiles/Default
+tools/build.sh ../OttoUI release
 tools/preflight.sh ../OttoUI
 tools/preflight.sh ../OttoUI "$PROFILE/BepInEx/plugins/potto007-OttoUI"
+tools/check_log.py OttoUI --expect 1.2.0
 ```
 
-`verify_package.py` also runs inside every Release build, so a zip that fails it
-is never produced.
+`verify_package.py` also runs inside every Release build. In a worktree the current
+template skips it silently, which is why `build.sh release` runs it too.
 
 ## What these do not cover
 
-None of them starts the game. Every failure that reached a player this series was
-found by playing, not by checking. These harnesses shorten the list of things
-that can be wrong before you get there.
+None of them starts the game. `check_log.py` reads a launch, but someone has to play
+it first. Every failure that reached a player this series was found by playing, not
+by checking. These harnesses shorten the list of things that can be wrong before you
+get there.
