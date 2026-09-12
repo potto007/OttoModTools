@@ -4,6 +4,8 @@ r2modman's local-import path extracts a package without its directories, so
 Translations/<Language>/*.json land at the folder root and Jotunn finds none of
 them. Nothing logs a fault, because a missing translation falls back to the key.
 Its Thunderstore install path keeps the tree, so this only affects a local import.
+r2modman was the mod manager then. Gale replaced it, and it is not yet known
+whether Gale's local import flattens the same way.
 
 This restores the layout and nothing else:
 

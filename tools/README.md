@@ -37,6 +37,11 @@ It reports the shape of the failure, not just a mismatch: `MISSING`, `FLATTENED`
 `Translations/<Language>/*.json` to the folder root. Jotunn reads only the tree,
 so every translation silently stopped loading. The package was correct throughout.
 
+r2modman was the mod manager then. Gale replaced it, and it is not yet known
+whether Gale flattens the same way. The checks do not depend on the manager: Gale
+also disables a mod by renaming its files to `*.old`, and installs imported from
+r2modman can still carry `mm_v2_manifest.json`.
+
 ## check_enums.py
 
 `ilspycmd` stores an enum constant as an ordinal and prints whichever member sits
@@ -64,7 +69,10 @@ trips the heuristic only because `m_foodStamina` sits two lines below it.
 
 ## Usage
 
+`$PROFILE` is the Gale profile the game loads, `Default`:
+
 ```
+PROFILE=/mnt/c/Users/paulo/AppData/Roaming/com.kesomannen.gale/valheim/profiles/Default
 tools/preflight.sh ../OttoUI
 tools/preflight.sh ../OttoUI "$PROFILE/BepInEx/plugins/potto007-OttoUI"
 ```
