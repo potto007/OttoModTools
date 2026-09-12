@@ -1,15 +1,19 @@
 """Make an installed mod folder match the package it claims to be.
 
-r2modman's local-import path extracts a package without its directories, so
+A local import extracts a package without its directories, so
 Translations/<Language>/*.json land at the folder root and Jotunn finds none of
 them. Nothing logs a fault, because a missing translation falls back to the key.
-Its Thunderstore install path keeps the tree, so this only affects a local import.
-r2modman was the mod manager then. Gale replaced it, and it is not yet known
-whether Gale's local import flattens the same way.
+The Thunderstore install path keeps the tree, so this only affects a local import.
+r2modman did it first. Gale does it too: on 2026-09-12 the Gale Default profile held
+a local import of Ottomation_ModLib 1.17.0 in plugins/Ottomation_ModLib with both
+translation files at the folder root.
 
 This restores the layout and nothing else:
 
   - it writes only paths the package defines, with the package's bytes
+  - it unlinks a file before writing it. Gale installs package files as hard links
+    into its cache, shared by every profile with that version, so writing through
+    the link would change all of them
   - it removes a flattened duplicate only once the correct path holds the same
     content, so nothing is deleted before its replacement exists
   - it never touches mm_v2_manifest.json, mods.yml, or any file the package does
@@ -78,6 +82,10 @@ def main(zip_path, install_dir, apply_changes):
 
     for kind, name, target in actions:
         os.makedirs(os.path.dirname(target), exist_ok=True)
+        # Opening a hard link for writing truncates the shared inode: Gale's cache
+        # and every other profile holding this file would change with it.
+        if os.path.lexists(target):
+            os.remove(target)
         with open(target, "wb") as handle:
             handle.write(package[name])
 
