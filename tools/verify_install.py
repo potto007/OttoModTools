@@ -117,7 +117,7 @@ def main(zip_path, install_dir, debug_dll=False):
     if problems:
         print("verdict: INSTALL DOES NOT MATCH THE PACKAGE (%d problems)" % len(problems))
         return 1
-    if debug_dll:
+    if any(kind == "SWAPPED" for kind, _ in notes):
         print("verdict: install matches the package apart from the Debug DLL")
     else:
         print("verdict: install matches the package exactly")

@@ -50,12 +50,15 @@ else
 fi
 
 if [ -n "$INSTALL" ] && [ -n "$ZIP" ]; then
+  BEFORE="$STATUS"; STATUS=0
   if [ "${DEBUG_DLL:-0}" = "1" ]; then
     run "install" python3 "$TOOLS/verify_install.py" "$ZIP" "$INSTALL" --debug-dll
   else
     run "install" python3 "$TOOLS/verify_install.py" "$ZIP" "$INSTALL"
   fi
-  if [ "$STATUS" -ne 0 ]; then
+  INSTALL_STATUS="$STATUS"
+  [ "$BEFORE" -ne 0 ] && STATUS=1
+  if [ "$INSTALL_STATUS" -ne 0 ]; then
     echo "To make the folder match the package (layout only, records untouched):"
     echo "  python3 \"$TOOLS/repair_install.py\" \"$ZIP\" \"$INSTALL\" --apply"
     echo
