@@ -12,8 +12,9 @@ leading ordinal such as "1 - ", and an empty section name becomes General.
 
 It sees ModLib's Config.Define, the config() and TextEntryConfig() helpers that the
 ServerSync based mods wrap around Config.Bind, and Config.Bind or any *Bind* helper
-such as BindSynced, when the names are string literals. A name held in a variable is
-invisible to it, which is why those helpers also normalize at bind time.
+such as BindSynced, when the key is a string literal or nameof(). A section held in a
+constant still leaves the key checkable. A key held in a variable is invisible to it,
+which is why those helpers also normalize at bind time.
 
 A run that finds no call sites fails. OttoBifrost's binds went unseen once and the
 check still printed a clean verdict over zero sites, which says nothing.
@@ -27,7 +28,7 @@ ROOT = sys.argv[1]
 BIND = re.compile(
     r'(?:Config\.Define\s*(?:<[^>]*>)?\s*\(\s*(?:isAdmin\s*:\s*)?\w+\s*,'
     r'|\b(?:config|TextEntryConfig|\w*Bind\w*)\s*(?:<[^>]*>)?\s*\()'
-    r'\s*"([^"]*)"\s*,\s*(?:"([^"]*)"|nameof\(([\w.]+)\))')
+    r'\s*(?:"([^"]*)"|([A-Za-z_][\w.]*))\s*,\s*(?:"([^"]*)"|nameof\(([\w.]+)\))')
 ORDINAL = re.compile(r"^\s*\d+(?:\.\d+)*\s*-\s*(?=\S)")
 
 
@@ -58,14 +59,16 @@ for dirpath, dirnames, filenames in os.walk(ROOT):
         path = os.path.join(dirpath, filename)
         where = os.path.relpath(path, ROOT)
         text = open(path, encoding="utf-8", errors="replace").read()
-        for sec, literal_key, nameof_key in BIND.findall(text):
+        for sec_literal, sec_constant, literal_key, nameof_key in BIND.findall(text):
             count += 1
             k = literal_key if literal_key else nameof_key.split(".")[-1]
-            if "{" not in sec and section(sec) != sec:
+            # A section held in a constant still lets the key be checked.
+            sec = None if sec_constant else sec_literal
+            if sec is not None and "{" not in sec and section(sec) != sec:
                 bad.append((where, "section", sec, section(sec)))
             if literal_key and "{" not in k and key(k) != k:
                 bad.append((where, "key", k, key(k)))
-            if "{" in sec or "{" in k:
+            if sec is None or "{" in sec or "{" in k:
                 continue
             slot = (section(sec), key(k))
             if slot in pairs and pairs[slot] != (sec, k):

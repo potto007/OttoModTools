@@ -14,6 +14,7 @@ GALE = "/mnt/c/Users/paulo/AppData/Roaming/com.kesomannen.gale"
 GAME = "valheim"
 PROFILES = os.path.join(GALE, GAME, "profiles")
 ILSPY = os.path.expanduser("~/.dotnet/tools/ilspycmd")
+DOTNET = shutil.which("dotnet") or os.path.expanduser("~/.dotnet/dotnet")
 MANAGED = "/mnt/c/Program Files (x86)/Steam/steamapps/common/Valheim/valheim_Data/Managed"
 
 
