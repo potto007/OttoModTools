@@ -70,6 +70,29 @@ def plugin_version(dll):
     return found.groups() if found else None
 
 
+def live_copies(plugins, filename):
+    """Folders under plugins/ holding filename live, and those holding filename.old.
+
+    Gale disables a mod by renaming its files to *.old, and a local import lands in
+    an unprefixed folder beside the prefixed one, so the folder a build writes to
+    and the folder the game loads from can differ."""
+    live, disabled = [], []
+    for dirpath, dirnames, filenames in os.walk(plugins):
+        if filename in filenames:
+            live.append(dirpath)
+        if filename + ".old" in filenames:
+            disabled.append(dirpath)
+    return sorted(live), sorted(disabled)
+
+
+def project_file(repo):
+    """The mod's .csproj at the top of its repo, or None."""
+    candidates = sorted(name for name in os.listdir(repo) if name.endswith(".csproj"))
+    named = [c for c in candidates if c.startswith(os.path.basename(os.path.abspath(repo)))]
+    chosen = named or candidates
+    return os.path.join(repo, chosen[0]) if chosen else None
+
+
 def manifest_version(folder):
     """version_number from a plugin folder's manifest.json, or None."""
     import json

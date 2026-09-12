@@ -10,10 +10,13 @@ letters or digits, capitalize the first letter of each part, keep the rest of ea
 as it is, join with nothing, and keep a leading underscore. A section name also loses a
 leading ordinal such as "1 - ", and an empty section name becomes General.
 
-It sees ModLib's Config.Define, and the config() and TextEntryConfig() helpers that the
-ServerSync based mods wrap around Config.Bind, when the names are string literals. A
-name held in a variable is invisible to it, which is why those helpers also normalize
-at bind time.
+It sees ModLib's Config.Define, the config() and TextEntryConfig() helpers that the
+ServerSync based mods wrap around Config.Bind, and Config.Bind or any *Bind* helper
+such as BindSynced, when the names are string literals. A name held in a variable is
+invisible to it, which is why those helpers also normalize at bind time.
+
+A run that finds no call sites fails. OttoBifrost's binds went unseen once and the
+check still printed a clean verdict over zero sites, which says nothing.
 """
 import os
 import re
@@ -23,7 +26,7 @@ ROOT = sys.argv[1]
 
 BIND = re.compile(
     r'(?:Config\.Define\s*(?:<[^>]*>)?\s*\(\s*(?:isAdmin\s*:\s*)?\w+\s*,'
-    r'|\b(?:config|TextEntryConfig)\s*(?:<[^>]*>)?\s*\()'
+    r'|\b(?:config|TextEntryConfig|\w*Bind\w*)\s*(?:<[^>]*>)?\s*\()'
     r'\s*"([^"]*)"\s*,\s*(?:"([^"]*)"|nameof\(([\w.]+)\))')
 ORDINAL = re.compile(r"^\s*\d+(?:\.\d+)*\s*-\s*(?=\S)")
 
@@ -73,5 +76,8 @@ print("checked %d bind call sites" % count)
 for where, label, name, want in bad:
     print("BAD %-9s %-40s -> %-40s %s" % (label, name, want, where))
 print()
+if not count:
+    print("verdict: NOTHING CHECKED - no bind call site matched, so no name was seen")
+    sys.exit(1)
 print("verdict:", "CONFIG NAMES WOULD BE RENAMED" if bad else "every config name is already normalized")
 sys.exit(1 if bad else 0)
