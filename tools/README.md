@@ -20,6 +20,7 @@ serve, and lists what the loop has taught so far.
 | `install_package.py` | Put a built package into a profile folder for testing. |
 | `check_config_names.py` | Are the setting names already PascalCase? Opt-in: `CHECK_CONFIG_NAMES=1`. |
 | `server.py` | Deploy packages to the dedicated server, restart it, and check what its launch loaded. |
+| `playtest.py` | Publish a test build as a GitHub pre-release that `../playtest/ottopia-playtest.bat` installs into testers' Gale profiles. |
 | `build.sh` | Build one mod in `compile`, `debug` or `release` mode, gated on the real result. |
 | `preflight.sh` | Every check above that needs no launch, for one repo. |
 

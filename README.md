@@ -8,6 +8,8 @@ produces.
   launch, read the log, and what went wrong doing it.
 - `docs/server.md` is the dedicated server: deploy a package, restart, and check
   the launch through the Winternode panel's API with `tools/server.py`.
+- `docs/playtest.md` gets test builds to the playtest group faster than Thunderstore
+  indexes them: GitHub pre-releases, installed with `playtest/ottopia-playtest.bat`.
 - `tools/README.md` says what each harness answers and what none of them cover.
 - `docs/decisions/` holds the decisions the tools depend on.
 

@@ -1,0 +1,3 @@
+# Batch files keep their CRLF line endings exactly as committed, so a raw download
+# from GitHub runs in cmd.
+*.bat -text
