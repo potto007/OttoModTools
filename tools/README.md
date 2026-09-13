@@ -153,7 +153,9 @@ compares it setting by setting. Validated without writing to the server:
 - a dry-run push that lists it;
 - a push refused, with exit 1, when the repo lacks a setting the server has.
 
-`push --apply` has not run.
+On 2026-09-13 `push --apply` toggled OttoBifrost's `LogPerformance` on and off on the
+running server. Its `Perf` log lines started and stopped with no restart, and `diff`
+was clean afterwards. `push --restart` has not run.
 `../docs/server.md` has the workflow and what the API really does.
 
 ## check_config_names.py

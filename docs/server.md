@@ -98,9 +98,15 @@ Validated on 2026-09-13 without writing to the server:
 - a dry-run push with a missing setting refused with exit 1;
 - a missing repo folder failing with exit 1.
 
-Not yet run: `push --apply` and the live reload. The planned test turns OttoBifrost's
-server-only `LogPerformance` on, watches for its `Perf` lines in the log with no
-restart, then turns it off.
+Live reload was confirmed on 2026-09-13 with Paul's approval, using OttoBifrost's
+server-only `LogPerformance`:
+
+- `push --apply` of `true` passed both read-backs, and the server log's OttoBifrost
+  `Perf` lines went from 4 to 10 over the next 30 s;
+- `push --apply` of `false` stopped them, 12 to 12 over 20 s;
+- `config diff` was clean afterwards, and the server never restarted.
+
+`--restart` has not run.
 
 ## The API
 
