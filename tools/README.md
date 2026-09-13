@@ -138,9 +138,13 @@ Validated read-only against the live server on 2026-09-12:
   `NOT LOADED` for an injected wrong version, a mod error and a missing mod.
 
 Uploads, overwrites, nested directories, deletes and download hashes were exercised
-in a scratch directory on the server. The power signals, and so `--apply`, `restart`,
-`start` and `stop`, have not run yet. `../docs/server.md` has the workflow and what
-the API really does.
+in a scratch directory on the server.
+
+On 2026-09-13, `deploy --apply` shipped OttoPay 1.5.0 and OttoAura 1.2.0 to the live
+server. It stopped the server, uploaded both packages and verified them byte for byte.
+It then started the server and confirmed the launch at 15:11:34 UTC, and
+`check_log.py --server` found both versions loaded cleanly. `restart` has not run.
+`../docs/server.md` has the workflow and what the API really does.
 
 ## check_config_names.py
 

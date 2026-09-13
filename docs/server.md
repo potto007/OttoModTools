@@ -83,7 +83,7 @@ wrong or silent:
 | `POST files/upload-token {"file_count": n}` | `{url, token}` for the daemon. Not in the docs; the panel's own file manager uses it. |
 | `POST <url>?token=&directory=` | Multipart, one file per request, field `files`. Overwrites a file of the same name and creates missing directories. |
 | `POST files/delete {"paths": [...]}` | 204, and removes a directory with its contents. The docs say `DELETE` with `path`. The panel answers 405 to `DELETE` and 422 to `path`. |
-| `POST power {"signal": ...}` | From the docs. Not yet exercised by the tool. |
+| `POST power {"signal": ...}` | `stop` and `start` confirmed by a deploy on 2026-09-13: `running` went to `offline`, then `starting`, then `running`. `restart` has not run. |
 
 ## Gotchas
 
