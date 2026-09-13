@@ -144,6 +144,16 @@ On 2026-09-13, `deploy --apply` shipped OttoPay 1.5.0 and OttoAura 1.2.0 to the 
 server. It stopped the server, uploaded both packages and verified them byte for byte.
 It then started the server and confirmed the launch at 15:11:34 UTC, and
 `check_log.py --server` found both versions loaded cleanly. `restart` has not run.
+
+`config pull|diff|push` keeps the server's `BepInEx/config` in a private git repo and
+compares it setting by setting. Validated without writing to the server:
+
+- a pull, then a clean `diff`;
+- a changed setting reported with exit 1;
+- a dry-run push that lists it;
+- a push refused, with exit 1, when the repo lacks a setting the server has.
+
+`push --apply` has not run.
 `../docs/server.md` has the workflow and what the API really does.
 
 ## check_config_names.py

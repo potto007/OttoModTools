@@ -16,6 +16,18 @@ WISP_TOKEN when that is set. The key is never printed.
   restart [--archive DIR]  restart, wait for the launch, check it
   start [--archive DIR]    start, wait for the launch, check it
   stop                     stop, and wait until the panel reports it offline
+  config pull              copy the server's BepInEx/config into the config repo
+  config diff              compare the config repo with the server, setting by setting.
+                           Exits 1 when they differ
+  config push [--apply] [--restart]
+                           without --apply, the diff. With it: upload the files that
+                           differ, read them back, wait, and read them again in case a
+                           plugin saved its old values over them. --restart also
+                           restarts the server and compares again after the launch
+
+The config repo is a plain folder mirroring BepInEx/config, meant to be its own git
+repository: SERVER_CONFIG_DIR, default ~/src/valheim/ottopia-server/BepInEx/config.
+Keep it private. permissions.yaml holds player Steam IDs.
 
 Stopping the server disconnects every player on it, and nothing here can tell whether
 anyone is playing. A launch counts as confirmed only when the server's log shows
@@ -51,6 +63,13 @@ KEY_FILE = os.environ.get("WISP_KEY_FILE") or os.path.expanduser(
     "~/.config/mods/winternode-github_actions.pat")
 PLUGINS = "/BepInEx/plugins"
 LOG = "/BepInEx/LogOutput.log"
+CONFIG = "/BepInEx/config"
+CONFIG_DIR = os.environ.get("SERVER_CONFIG_DIR") or os.path.expanduser(
+    "~/src/valheim/ottopia-server/BepInEx/config")
+SETTING = re.compile(r"^([^=]+?)\s*=\s*(.*?)\s*$")
+# How long a pushed file must stay as pushed before a plugin is taken not to have
+# saved its old values over it.
+SETTLE = 20
 NAMESPACE = "potto007-"
 # Cloudflare in front of the panel refused a browser user agent sent from a script.
 AGENT = "OttoModTools/1.0"
@@ -474,10 +493,162 @@ def status(panel):
     return 0
 
 
+def settings(name, text):
+    """What a config file says, without what BepInEx rewrites on every save.
+
+    A .cfg becomes {"Section/Key": value}: comments, blank lines and the "created by
+    plugin vX" header are dropped, because a plugin rewrites them whenever it saves.
+    Any other file is compared as text with trailing whitespace removed."""
+    text = text.lstrip("\ufeff")
+    if not name.endswith(".cfg"):
+        return {"(text)": "\n".join(line.rstrip() for line in text.strip().splitlines())}
+    section, values = "", {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            continue
+        found = SETTING.match(stripped)
+        if found:
+            values["%s/%s" % (section, found.group(1))] = found.group(2)
+    return values
+
+
+def local_configs(directory):
+    files = {}
+    for dirpath, dirnames, filenames in os.walk(directory):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for filename in filenames:
+            full = os.path.join(dirpath, filename)
+            rel = os.path.relpath(full, directory).replace(os.sep, "/")
+            with open(full, encoding="utf-8") as handle:
+                files[rel] = handle.read()
+    return files
+
+
+def config_changes(panel, directory):
+    """({file: [(setting, server value, repo value)]}, files only on the server).
+
+    A server value of None is a setting the repo adds; a repo value of None is one only
+    the server has, usually added by a newer plugin version since the last pull."""
+    local = local_configs(directory)
+    remote = panel.walk(CONFIG) or {}
+    changes = {}
+    for name, text in sorted(local.items()):
+        mine = settings(name, text)
+        theirs = settings(name, panel.read_text(CONFIG + "/" + name)) if name in remote else {}
+        differing = [(key, theirs.get(key), mine.get(key))
+                     for key in sorted(set(mine) | set(theirs)) if mine.get(key) != theirs.get(key)]
+        if name not in remote:
+            differing = [("(file)", None, "new file")]
+        if differing:
+            changes[name] = differing
+    return changes, sorted(set(remote) - set(local))
+
+
+def print_changes(changes, untracked):
+    for name, differing in changes.items():
+        print(name)
+        for key, theirs, mine in differing:
+            if mine is None:
+                print("  SERVER ONLY %s = %s" % (key, theirs))
+            elif key == "(text)":
+                print("  TEXT        differs")
+            else:
+                print("  %-11s %s: server %s -> repo %s"
+                      % ("NEW" if theirs is None else "CHANGED", key, theirs, mine))
+    for name in untracked:
+        print("UNTRACKED   %s is on the server and not in the repo" % name)
+
+
+def config_pull(panel, directory):
+    remote = panel.walk(CONFIG) or {}
+    local = local_configs(directory) if os.path.isdir(directory) else {}
+    counts = {"NEW": 0, "UPDATED": 0, "SAME": 0}
+    for name in sorted(remote):
+        text = panel.read_text(CONFIG + "/" + name)
+        kind = "NEW" if name not in local else "SAME" if local[name] == text else "UPDATED"
+        counts[kind] += 1
+        if kind != "SAME":
+            path = os.path.join(directory, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            print("%-8s %s" % (kind, name))
+    for name in sorted(set(local) - set(remote)):
+        print("NOT ON SERVER %s (left in the repo)" % name)
+    print("PULL DONE: %d new, %d updated, %d unchanged, into %s. Review with git diff and commit."
+          % (counts["NEW"], counts["UPDATED"], counts["SAME"], directory))
+    return 0
+
+
+def config_diff(panel, directory):
+    changes, untracked = config_changes(panel, directory)
+    print_changes(changes, untracked)
+    print("DIFF %s" % ("CLEAN: the server matches the repo" if not changes
+                       else "DRIFT: %d files differ" % len(changes)))
+    return 1 if changes else 0
+
+
+def config_push(panel, directory, apply, restart):
+    changes, untracked = config_changes(panel, directory)
+    print_changes(changes, untracked)
+    if not changes:
+        print("PUSH DONE: nothing to push, the server matches the repo")
+        return 0
+    stale = sorted(name for name, differing in changes.items()
+                   if any(mine is None for key, theirs, mine in differing))
+    if stale:
+        print("PUSH REFUSED: %s hold settings only the server has. Pushing would drop "
+              "them. Run config pull, review, and commit first." % ", ".join(stale))
+        return 1
+    if not apply:
+        print("dry run, nothing changed. --apply uploads %d files." % len(changes))
+        return 0
+
+    local = local_configs(directory)
+    for name in changes:
+        panel.upload([((CONFIG + "/" + os.path.dirname(name)).rstrip("/"),
+                       os.path.basename(name), local[name].encode("utf-8"))])
+
+    def unequal():
+        return sorted(name for name in changes if settings(name, local[name])
+                      != settings(name, panel.read_text(CONFIG + "/" + name)))
+
+    wrong = unequal()
+    if wrong:
+        print("PUSH FAILED: read back differs for %s" % ", ".join(wrong))
+        return 1
+    print("uploaded and read back: %s" % ", ".join(changes))
+    time.sleep(SETTLE)
+    reverted = unequal()
+    if reverted:
+        print("PUSH FAILED: within %d s a plugin saved other values over %s. It keeps "
+              "its settings in memory; push again with --restart." % (SETTLE, ", ".join(reverted)))
+        return 1
+    if not restart:
+        print("PUSH DONE: files in place after %d s. A plugin that watches its file (OttoPay, "
+              "OttoAura, OttoBifrost) applies them now; others at the next launch." % SETTLE)
+        return 0
+    if wait_launch(panel, panel.signal("restart")) is None:
+        return 1
+    reverted = unequal()
+    print("PUSH %s" % ("DONE: the pushed settings survived the restart" if not reverted
+                       else "FAILED: after the restart %s differ" % ", ".join(reverted)))
+    return 1 if reverted else 0
+
+
 def main():
     parser = argparse.ArgumentParser(usage=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
+    configuring = sub.add_parser("config")
+    configuring.add_argument("action", choices=["pull", "diff", "push"])
+    configuring.add_argument("--dir", default=CONFIG_DIR)
+    configuring.add_argument("--apply", action="store_true")
+    configuring.add_argument("--restart", action="store_true")
     for name in ("log", "restart", "start"):
         sub.add_parser(name).add_argument("--archive", default=None)
     sub.add_parser("stop")
@@ -492,6 +663,15 @@ def main():
         panel = Panel()
         if args.command == "status":
             return status(panel)
+        if args.command == "config":
+            if args.action == "pull":
+                return config_pull(panel, args.dir)
+            if not os.path.isdir(args.dir):
+                print("FAIL  no config repo at %s. Run config pull first." % args.dir)
+                return 1
+            if args.action == "diff":
+                return config_diff(panel, args.dir)
+            return config_push(panel, args.dir, args.apply, args.restart)
         if args.command == "log":
             failures = check_launch(panel, panel.read_text(LOG), potto_folders(panel),
                                     args.archive)

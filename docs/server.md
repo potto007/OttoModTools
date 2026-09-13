@@ -57,6 +57,51 @@ It fails the launch when either of these happens:
 The expected plugin name and version come from the `BepInPlugin` attribute of the
 DLL on the server, read with `ilspycmd`, not from the manifest.
 
+## Configs
+
+The server's `BepInEx/config` is kept as code in a private git repository,
+`~/src/valheim/ottopia-server`, mirrored under `BepInEx/config`. It has no remote and
+must never go in a public one: `permissions.yaml` holds a player Steam ID.
+`SERVER_CONFIG_DIR` points the tool at another checkout.
+
+```
+python3 $TOOLS/server.py config pull              # server -> repo, then review and commit
+python3 $TOOLS/server.py config diff              # exit 1 when the server has drifted
+python3 $TOOLS/server.py config push              # dry run: what would change
+python3 $TOOLS/server.py config push --apply      # upload, read back, settle, read again
+python3 $TOOLS/server.py config push --apply --restart
+```
+
+The loop: edit a setting in the repo, commit, `config push --apply`. Anything changed
+in-game through ConfigurationManager, or by a plugin that saves its own file, shows
+up in `config diff`. `config pull` brings it into the repo to review and commit.
+
+- **Settings are compared, not bytes.** BepInEx rewrites a `.cfg`'s header and
+  comments whenever a plugin saves it. A `.cfg` is compared as `Section/Key = value`;
+  other files as text.
+- **Push refuses to drop a setting.** A setting only the server has, usually added by
+  a newer plugin version, would vanish from the uploaded file. `config push` stops and
+  asks for a pull first.
+- **Push checks that the file stays pushed.** After uploading it reads each file back,
+  waits 20 s and reads it again. A plugin that holds its settings in memory and saves
+  them would overwrite the push, and `--restart` is then the way to apply it.
+- **Live or restart.** OttoPay, OttoAura and OttoBifrost watch their own `.cfg` and call
+  `Config.Reload()` when it changes, so their settings should apply with no restart.
+  ServerSync then sends the synced ones to players. The third-party plugins were not
+  checked; assume they read their file only at launch.
+
+Validated on 2026-09-13 without writing to the server:
+
+- a pull of all 21 files, then `diff` clean;
+- a changed `LogPerformance` reported as `CHANGED` with exit 1;
+- a dry-run push that listed it and changed nothing;
+- a dry-run push with a missing setting refused with exit 1;
+- a missing repo folder failing with exit 1.
+
+Not yet run: `push --apply` and the live reload. The planned test turns OttoBifrost's
+server-only `LogPerformance` on, watches for its `Perf` lines in the log with no
+restart, then turns it off.
+
 ## The API
 
 The panel is WISP 3.7.11, not Pterodactyl. The docs are at
