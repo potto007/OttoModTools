@@ -18,8 +18,8 @@ python3 $TOOLS/server.py log --archive ~/valheim-logs/server
 ## The workflow
 
 1. **Build and check the Release package**: `$TOOLS/build.sh ../OttoX release`.
-2. **Plan the deploy**: `server.py deploy <zip>...`. It runs `verify_package.py`,
-   then prints the version on the server, the files it will upload and the files it
+2. **Plan the deploy**: `server.py deploy <zip>...`. It runs `verify_package.py` on
+   `potto007-` packages (a third-party zip from Thunderstore skips it), then prints the version on the server, the files it will upload and the files it
    will delete. It refuses a package that is not shippable, one whose file name and
    manifest disagree, and a downgrade unless `--allow-downgrade` is passed.
 3. **Deploy**: the same command with `--apply`.
