@@ -4,18 +4,23 @@ The server runs on Winternode's WISP panel. Every call goes through the panel's
 client API with the key in ~/.config/mods/winternode-github_actions.pat, or in
 WISP_TOKEN when that is set. The key is never printed.
 
-  status                   power state, every plugin folder on the server with the
-                           version its manifest names, and what the last launch loaded
+  status                   power state, every plugin and patcher folder on the server
+                           with the version its manifest names, and what the last
+                           launch loaded
   log [--archive DIR]      check the last launch for every potto007 plugin installed
-  deploy <zip>... [--apply] [--allow-downgrade] [--archive DIR]
+  deploy <zip>... [--apply] [--allow-downgrade] [--archive DIR] [--progress LOG]
                            without --apply, the plan and nothing else. With it: stop
                            the server, upload each package into
-                           BepInEx/plugins/<namespace>-<name>, delete the files the
-                           package does not hold, compare every file's bytes with the
-                           package, start the server, wait for the launch, check it
-  restart [--archive DIR]  restart, wait for the launch, check it
-  start [--archive DIR]    start, wait for the launch, check it
-  stop                     stop, and wait until the panel reports it offline
+                           BepInEx/plugins/<namespace>-<name>, and its patchers/ into
+                           BepInEx/patchers/<namespace>-<name> as a mod manager does,
+                           delete the files the package does not hold, compare every
+                           file's bytes with the package, start the server, wait for
+                           the launch, check it
+  restart [--archive DIR] [--progress LOG]
+                           restart, wait for the launch, check it
+  start [--archive DIR] [--progress LOG]
+                           start, wait for the launch, check it
+  stop [--progress LOG]    stop, and wait until the panel reports it offline
   config pull              copy the server's BepInEx/config into the config repo
   config diff              compare the config repo with the server, setting by setting.
                            Exits 1 when they differ
@@ -32,6 +37,11 @@ Keep it private. permissions.yaml holds player Steam IDs.
 Stopping the server disconnects every player on it, and nothing here can tell whether
 anyone is playing. A launch counts as confirmed only when the server's log shows
 "Game server connected" at or after the moment the panel accepted the power signal.
+
+--progress LOG writes the work band's sidecar, LOG.progress.jsonl: the step running and
+an estimate of how far through the run it is, from phase durations learned from earlier
+runs. LOG is the file the command's output is tee'd to; the band reads the DONE or
+FAILED the wrapper prints there. --label names the band row.
 
 Environment: WISP_PANEL (default https://gcp.winternode.com), WISP_SERVER (default
 a48fc6f4), WISP_TOKEN, WISP_KEY_FILE.
@@ -62,6 +72,8 @@ SERVER = os.environ.get("WISP_SERVER", "a48fc6f4")
 KEY_FILE = os.environ.get("WISP_KEY_FILE") or os.path.expanduser(
     "~/.config/mods/winternode-github_actions.pat")
 PLUGINS = "/BepInEx/plugins"
+# BepInEx's preloader loads patchers from here only, never from a plugin folder.
+PATCHERS = "/BepInEx/patchers"
 LOG = "/BepInEx/LogOutput.log"
 CONFIG = "/BepInEx/config"
 CONFIG_DIR = os.environ.get("SERVER_CONFIG_DIR") or os.path.expanduser(
@@ -71,16 +83,100 @@ SETTING = re.compile(r"^([^=]+?)\s*=\s*(.*?)\s*$")
 # saved its old values over it.
 SETTLE = 20
 NAMESPACE = "potto007-"
+# The work band row's name: the server's name, not its panel id.
+LABEL = os.environ.get("SERVER_LABEL", "Ottopia")
 # Cloudflare in front of the panel refused a browser user agent sent from a script.
 AGENT = "OttoModTools/1.0"
 PACKAGE = re.compile(r"^(?P<folder>[^-]+-(?P<name>.+))-(?P<version>\d+\.\d+\.\d+)\.zip$")
 # Unity stamps this line in UTC.
 CONNECTED = re.compile(r"(\d\d/\d\d/\d{4} \d\d:\d\d:\d\d): Game server connected")
 LOADING = re.compile(r"\[Info\s*:\s*BepInEx\] Loading \[([^\]]+)\]")
+PATCHER = re.compile(r"\] Loaded \d+ patcher methods? from \[([^\]]+)\]")
 SKEW = datetime.timedelta(seconds=10)
 OFFLINE_GRACE = 90
 LAUNCH_TIMEOUT = 900
 STOP_TIMEOUT = 300
+TIMINGS = os.path.expanduser("~/.cache/OttoModTools/server-timings.json")
+
+
+class Progress:
+    """Estimated progress for the work band, one JSON line per change in a sidecar.
+
+    Each phase is weighted by how long it is expected to take: seconds per item for
+    counted phases (files, plugins), seconds in all for timed ones (a stop, a launch).
+    The expectations are learned from earlier runs. done/total is the share of the
+    expected run already behind, as a percentage. A timed phase creeps toward its
+    estimate and holds at 95% of it until it ends. Without a log it does nothing."""
+
+    DEFAULTS = {"file": 2.0, "check": 8.0, "stop": 30.0, "start": 150.0,
+                "restart": 180.0}
+    TIMED = ("stop", "start", "restart")
+
+    def __init__(self, log, label, phases):
+        """phases is [(phase, timing key, item count)], in the order they run."""
+        self.path = log + ".progress.jsonl" if log else None
+        self.label = label
+        self.timings = dict(self.DEFAULTS)
+        try:
+            with open(TIMINGS) as handle:
+                self.timings.update(json.load(handle))
+        except (OSError, ValueError):
+            pass
+        self.phases = {phase: (key, count) for phase, key, count in phases}
+        self.weights = {phase: self.timings[key] * (1 if key in self.TIMED else count)
+                        for phase, key, count in phases}
+        self.total = sum(self.weights.values()) or 1.0
+        self.behind, self.phase, self.items, self.started, self.written = 0.0, None, 0, 0, 0
+
+    def begin(self, phase, current=None):
+        self.phase, self.items, self.started = phase, 0, time.time()
+        self.write(current, force=True)
+
+    def advance(self, current=None):
+        self.items += 1
+        self.write(current)
+
+    def tick(self, current=None):
+        self.write(current)
+
+    def end(self):
+        key, count = self.phases[self.phase]
+        elapsed = time.time() - self.started
+        per = elapsed if key in self.TIMED else elapsed / max(count, 1)
+        self.timings[key] = round((self.timings[key] + per) / 2, 1)
+        self.behind += self.weights[self.phase]
+        self.phase = None
+        if self.path:
+            try:
+                os.makedirs(os.path.dirname(TIMINGS), exist_ok=True)
+                with open(TIMINGS, "w") as handle:
+                    json.dump(self.timings, handle)
+            except OSError:
+                pass
+
+    def write(self, current, force=False):
+        if not self.path or (not force and time.time() - self.written < 1):
+            return
+        done = self.behind
+        if self.phase:
+            key, count = self.phases[self.phase]
+            weight = self.weights[self.phase]
+            if key in self.TIMED:
+                done += min(time.time() - self.started, weight * 0.95)
+            else:
+                done += weight * min(self.items, count) / max(count, 1)
+        left = max(self.total - done, 0)
+        tail = "~%dm%02ds left" % divmod(int(left), 60)
+        line = {"v": 1, "label": self.label, "phase": self.phase or "done",
+                "done": min(int(100 * done / self.total), 99), "total": 100,
+                "current": "%s, %s" % (current, tail) if current else tail,
+                "ts": int(time.time())}
+        with open(self.path, "a") as handle:
+            handle.write(json.dumps(line) + "\n")
+        self.written = time.time()
+
+
+NO_PROGRESS = Progress(None, None, [])
 
 
 class PanelError(Exception):
@@ -197,10 +293,12 @@ class Panel:
             raise PanelError("download %s: %s" % (path, getattr(error, "code", None)
                                                   or error.reason))
 
-    def upload(self, files):
+    def upload(self, files, each=None):
         """files is [(directory, name, bytes)]. The upload overwrites a file of the same
         name and creates missing directories. One grant covers the batch, as it does
-        in the panel's own file manager."""
+        in the panel's own file manager. each(name) runs after every file."""
+        if not files:
+            return
         grant = self.json("POST", "files/upload-token", body={"file_count": len(files)})
         for directory, name, data in files:
             boundary = uuid.uuid4().hex
@@ -220,6 +318,8 @@ class Panel:
                 raise PanelError("upload %s/%s: %s" % (directory, name,
                                                        getattr(error, "code", None)
                                                        or error.reason))
+            if each:
+                each(name)
 
     def delete(self, paths):
         self.call("POST", "files/delete", body={"paths": paths})
@@ -243,20 +343,21 @@ def launched_after(text, since):
     return None
 
 
-def wait_state(panel, want, timeout):
+def wait_state(panel, want, timeout, progress=NO_PROGRESS):
     deadline, last = time.time() + timeout, None
     while time.time() < deadline:
         state = panel.power_state()
         if state != last:
             print("  power: %s" % state)
             last = state
+        progress.tick("power " + str(state))
         if state == want:
             return True
         time.sleep(5)
     return False
 
 
-def wait_launch(panel, since):
+def wait_launch(panel, since, progress=NO_PROGRESS):
     """The log of a launch that connected at or after since, or None.
 
     A restart passes through offline, so offline counts as a failure only once it
@@ -267,6 +368,7 @@ def wait_launch(panel, since):
         if state != last:
             print("  power: %s" % state)
             last = state
+        progress.tick("power " + str(state))
         if state == "offline":
             offline_since = offline_since or time.time()
             if time.time() - offline_since > OFFLINE_GRACE:
@@ -295,8 +397,9 @@ def potto_folders(panel):
                   if e["type"] == "directory" and e["name"].startswith(NAMESPACE))
 
 
-def check_launch(panel, text, folders, archive):
-    """check_log.py --server for the plugin in each folder. Returns the failure count.
+def check_launch(panel, text, folders, archive, progress=NO_PROGRESS):
+    """check_log.py --server for the plugin in each folder, and the preloader's line
+    for each patcher. Returns the failure count.
 
     The name and version to expect come from the BepInPlugin attribute of the DLL on
     the server, which is what BepInEx itself prints."""
@@ -306,14 +409,40 @@ def check_launch(panel, text, folders, archive):
         os.makedirs(os.path.dirname(log), exist_ok=True)
         with open(log, "w", encoding="utf-8") as handle:
             handle.write(text)
-        return check_plugins(panel, log, folders, work)
+        return check_plugins(panel, log, folders, work, progress)
 
 
-def check_plugins(panel, log, folders, work):
+def check_patchers(text, folder, dlls):
+    """The preloader names a patcher by its assembly, which is its file name here."""
+    loaded = PATCHER.findall(text)
     failures = 0
+    for dll in dlls:
+        name = os.path.splitext(os.path.basename(dll))[0]
+        found = [l for l in loaded if l.split(" ")[0] == name]
+        if found:
+            print("LOADED     patcher %s (%s)" % (found[0], folder))
+        else:
+            print("FAIL  patcher %s from %s not loaded: no 'Loaded ... patcher method "
+                  "from [%s ...]' line" % (dll, folder, name))
+            failures += 1
+    return failures
+
+
+def check_plugins(panel, log, folders, work, progress=NO_PROGRESS):
+    failures = 0
+    with open(log, encoding="utf-8") as handle:
+        text = handle.read()
     for folder in folders:
+        progress.advance(folder)
         dlls = sorted(n for n in (panel.walk(PLUGINS + "/" + folder) or {})
                       if n.endswith(".dll"))
+        patchers = sorted(n for n in (panel.walk(PATCHERS + "/" + folder) or {})
+                          if n.endswith(".dll"))
+        if patchers:
+            print("=============== %s" % folder)
+            failures += check_patchers(text, folder, patchers)
+            if not dlls:
+                continue
         if len(dlls) != 1:
             print("FAIL  %s holds %d DLLs, expected 1" % (folder, len(dlls)))
             failures += 1
@@ -353,8 +482,20 @@ def plan(panel, zip_path, allow_downgrade):
                         % (manifest.get("name"), manifest.get("version_number"),
                            found.group("name"), found.group("version")))
 
-    folder = PLUGINS + "/" + found.group("folder")
-    server = panel.walk(folder)
+    name = found.group("folder")
+    folder = PLUGINS + "/" + name
+    targets = []
+    for target, files in placements(name, package).items():
+        on_server = panel.walk(target)
+        targets.append({"folder": target, "files": files, "remove": False,
+                        "extras": sorted(set(on_server or {}) - set(files))})
+        if target == folder:
+            server = on_server
+    # A version that drops its patchers must not leave the old ones loading.
+    if PATCHERS + "/" + name not in placements(name, package) and \
+            panel.walk(PATCHERS + "/" + name) is not None:
+        targets.append({"folder": PATCHERS + "/" + name, "files": {}, "remove": True,
+                        "extras": []})
     current = None
     if server and "manifest.json" in server:
         try:
@@ -367,23 +508,42 @@ def plan(panel, zip_path, allow_downgrade):
             problems.append("DOWNGRADE  the server has %s, the package is %s. Pass "
                             "--allow-downgrade to replace it anyway"
                             % (current, found.group("version")))
-    extras = sorted(set(server or {}) - set(package))
 
-    print("%s: server %s -> package %s" % (found.group("folder"),
+    print("%s: server %s -> package %s" % (name,
                                           current or ("absent" if server is None else "unknown"),
                                           found.group("version")))
-    print("  UPLOAD  %d files, %d bytes, into %s" % (len(package),
-                                                     sum(map(len, package.values())), folder))
-    for name in extras:
-        print("  DELETE  %s/%s" % (folder, name))
-    return {"folder": folder, "package": package, "extras": extras, "problems": problems}
+    for target in targets:
+        if target["remove"]:
+            print("  REMOVE  %s, the package holds no patchers" % target["folder"])
+            continue
+        files = target["files"]
+        print("  UPLOAD  %d files, %d bytes, into %s" % (len(files),
+                                                         sum(map(len, files.values())),
+                                                         target["folder"]))
+        for extra in target["extras"]:
+            print("  DELETE  %s/%s" % (target["folder"], extra))
+    return {"name": name, "targets": targets, "problems": problems}
 
 
-def verify_folder(panel, folder, package):
+def placements(name, package):
+    """{server folder: {path in it: bytes}} for one package. Its patchers/ go to
+    BepInEx/patchers/<name>, where a mod manager puts them and the preloader looks;
+    everything else, manifest included, to BepInEx/plugins/<name>."""
+    found = {PLUGINS + "/" + name: {}}
+    for path, data in package.items():
+        if path.startswith("patchers/"):
+            found.setdefault(PATCHERS + "/" + name, {})[path[len("patchers/"):]] = data
+        else:
+            found[PLUGINS + "/" + name][path] = data
+    return found
+
+
+def verify_folder(panel, folder, package, progress=NO_PROGRESS):
     """Every package file present with the package's bytes, and nothing else."""
     problems = []
     server = panel.walk(folder) or {}
     for name, data in sorted(package.items()):
+        progress.advance(name)
         if name not in server:
             problems.append("MISSING    %s/%s" % (folder, name))
         elif server[name] != len(data):
@@ -427,21 +587,44 @@ def deploy(panel, args):
 
     was = panel.power_state()
     print("server is %s" % was)
+    targets = [t for r in plans for t in r["targets"]]
+    count = sum(len(t["files"]) for t in targets)
+    progress = Progress(args.progress, args.label or "%s deploy" % LABEL,
+                        ([("stop", "stop", 1)] if was != "offline" else [])
+                        + [("upload", "file", count), ("verify", "file", count)]
+                        + ([("launch", "start", 1), ("check", "check", len(plans))]
+                           if was != "offline" else []))
     if was != "offline":
+        progress.begin("stop", "power " + str(was))
         panel.signal("stop")
-        if not wait_state(panel, "offline", STOP_TIMEOUT):
+        if not wait_state(panel, "offline", STOP_TIMEOUT, progress):
             print("DEPLOY FAILED: the server did not stop within %d s, nothing uploaded"
                   % STOP_TIMEOUT)
             return 1
 
+        progress.end()
+
     problems = []
-    for result in plans:
-        folder, package = result["folder"], result["package"]
+    progress.begin("upload")
+    for target in targets:
+        folder, files = target["folder"], target["files"]
+        if target["remove"]:
+            panel.delete([folder])
+            continue
         panel.upload([((folder + "/" + os.path.dirname(name)).rstrip("/"),
-                       os.path.basename(name), data) for name, data in package.items()])
-        if result["extras"]:
-            panel.delete([folder + "/" + name for name in result["extras"]])
-        problems += verify_folder(panel, folder, package)
+                       os.path.basename(name), data) for name, data in files.items()],
+                     progress.advance)
+        if target["extras"]:
+            panel.delete([folder + "/" + name for name in target["extras"]])
+    progress.end()
+    progress.begin("verify")
+    for target in targets:
+        if target["remove"]:
+            if panel.walk(target["folder"]) is not None:
+                problems.append("LEFT       %s is still there" % target["folder"])
+            continue
+        problems += verify_folder(panel, target["folder"], target["files"], progress)
+    progress.end()
     for problem in problems:
         print(problem)
     if problems:
@@ -449,26 +632,35 @@ def deploy(panel, args):
               "a half-written plugin; rerun, or start it with server.py start"
               % len(problems))
         return 1
-    print("uploaded and verified byte for byte: %s"
-          % ", ".join(os.path.basename(r["folder"]) for r in plans))
+    print("uploaded and verified byte for byte: %s" % ", ".join(r["name"] for r in plans))
 
     if was == "offline":
         print("DEPLOY PASSED: the server was offline before, so it was not started")
         return 0
-    text = wait_launch(panel, panel.signal("start"))
+    progress.begin("launch")
+    text = wait_launch(panel, panel.signal("start"), progress)
     if text is None:
         return 1
-    failures = check_launch(panel, text, [os.path.basename(r["folder"]) for r in plans],
-                            args.archive)
+    progress.end()
+    progress.begin("check")
+    failures = check_launch(panel, text, [r["name"] for r in plans], args.archive, progress)
+    progress.end()
     print("DEPLOY %s" % ("PASSED" if not failures else "FAILED: %d plugins" % failures))
     return 1 if failures else 0
 
 
-def launch(panel, signal, archive):
-    text = wait_launch(panel, panel.signal(signal))
+def launch(panel, signal, archive, progress_log=None, label=None):
+    folders = potto_folders(panel)
+    progress = Progress(progress_log, label or "%s %s" % (LABEL, signal),
+                        [("launch", signal, 1), ("check", "check", len(folders))])
+    progress.begin("launch")
+    text = wait_launch(panel, panel.signal(signal), progress)
     if text is None:
         return 1
-    failures = check_launch(panel, text, potto_folders(panel), archive)
+    progress.end()
+    progress.begin("check")
+    failures = check_launch(panel, text, folders, archive, progress)
+    progress.end()
     print("%s %s" % (signal.upper(), "PASSED" if not failures
                      else "FAILED: %d plugins" % failures))
     return 1 if failures else 0
@@ -487,11 +679,16 @@ def status(panel):
         except (ValueError, PanelError):
             version = None
         print("  %-40s %s" % (entry["name"], version or "no manifest"))
+    for entry in panel.listdir(PATCHERS) or []:
+        if entry["type"] == "directory":
+            print("  %-40s patchers" % entry["name"])
     text = panel.read_text(LOG)
     print()
     connected = CONNECTED.findall(text)
     print("last launch: %s" % ("Game server connected %s UTC" % connected[-1] if connected
                                else "no Game server connected line"))
+    for loaded in PATCHER.findall(text):
+        print("  patcher %s" % loaded)
     for loaded in LOADING.findall(text):
         print("  loaded %s" % loaded)
     return 0
@@ -653,7 +850,8 @@ def main():
     configuring.add_argument("--dir", default=CONFIG_DIR)
     configuring.add_argument("--apply", action="store_true")
     configuring.add_argument("--restart", action="store_true")
-    for name in ("log", "restart", "start"):
+    sub.add_parser("log").add_argument("--archive", default=None)
+    for name in ("restart", "start"):
         sub.add_parser(name).add_argument("--archive", default=None)
     sub.add_parser("stop")
     deploying = sub.add_parser("deploy")
@@ -661,6 +859,9 @@ def main():
     deploying.add_argument("--apply", action="store_true")
     deploying.add_argument("--allow-downgrade", action="store_true")
     deploying.add_argument("--archive", default=None)
+    for name in ("restart", "start", "stop", "deploy"):
+        sub.choices[name].add_argument("--progress", default=None, metavar="LOG")
+        sub.choices[name].add_argument("--label", default=None)
     args = parser.parse_args()
 
     try:
@@ -684,12 +885,17 @@ def main():
         if args.command == "deploy":
             return deploy(panel, args)
         if args.command == "stop":
+            progress = Progress(args.progress, args.label or "%s stop" % LABEL,
+                                [("stop", "stop", 1)])
+            progress.begin("stop")
             panel.signal("stop")
-            stopped = wait_state(panel, "offline", STOP_TIMEOUT)
+            stopped = wait_state(panel, "offline", STOP_TIMEOUT, progress)
+            if stopped:
+                progress.end()
             print("STOP %s" % ("PASSED" if stopped else "FAILED: still not offline after "
                                "%d s" % STOP_TIMEOUT))
             return 0 if stopped else 1
-        return launch(panel, args.command, args.archive)
+        return launch(panel, args.command, args.archive, args.progress, args.label)
     except PanelError as error:
         print("FAIL  %s" % error)
         return 1

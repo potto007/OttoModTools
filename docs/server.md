@@ -26,7 +26,10 @@ python3 $TOOLS/server.py log --archive ~/valheim-logs/server
    - Stops the server and waits until the panel reports it offline. Every player is
      disconnected, and the tool cannot tell whether anyone is playing.
    - Uploads every package file into `BepInEx/plugins/<namespace>-<name>`, then
-     deletes files in that folder that the package does not hold.
+     deletes files in that folder that the package does not hold. A package's
+     `patchers/` goes to `BepInEx/patchers/<namespace>-<name>` instead, as a mod
+     manager installs it: BepInEx's preloader looks nowhere else. A version that no
+     longer ships patchers has that folder removed.
    - Downloads every file back and compares its hash with the package. On any
      difference it stops there and leaves the server stopped, so a half-written
      plugin never launches.
@@ -40,6 +43,22 @@ python3 $TOOLS/server.py log --archive ~/valheim-logs/server
 
 Every command ends with a verdict line (`DEPLOY PASSED`, `LAUNCH FAILED`,
 `LOG PASSED`) and exits non-zero on failure.
+
+## Progress in the work band
+
+`deploy`, `restart`, `start` and `stop` take `--progress LOG`, the file their output
+is tee'd to, and write the band's sidecar `LOG.progress.jsonl`: the row is named
+`Ottopia deploy` (`SERVER_LABEL`, or `--label`) and shows the step, an estimated
+percentage and the time left. Each step is weighted by how long it took the last
+runs, kept in `~/.cache/OttoModTools/server-timings.json`; until then the defaults
+are 30 s to stop, 150 s to launch, 2 s per file and 8 s per plugin check. The wrapper
+still prints `DONE` or `FAILED` from the exit code.
+
+```
+LOG=/tmp/ottopia-deploy.log; : > $LOG; : > $LOG.progress.jsonl
+( python3 $TOOLS/server.py deploy <zip>... --apply --progress $LOG 2>&1; rc=$?
+  [ $rc -eq 0 ] && echo DONE || echo FAILED ) | tee -a $LOG
+```
 
 ## How a launch is confirmed
 
@@ -55,7 +74,9 @@ It fails the launch when either of these happens:
 - no such line appears within 15 minutes.
 
 The expected plugin name and version come from the `BepInPlugin` attribute of the
-DLL on the server, read with `ilspycmd`, not from the manifest.
+DLL on the server, read with `ilspycmd`, not from the manifest. A patcher has no such
+attribute: it passes when the preloader logs `Loaded N patcher method from [<name>
+<version>]` for its file name.
 
 ## Configs
 
@@ -152,5 +173,8 @@ wrong or silent:
   `check_log.py` counts only errors from a mod or naming it.
 - **Other sessions deploy to this server too.** On 2026-09-12 OttoBifrost 1.3.0 was
   uploaded and the server restarted while this tool was being written.
+- **A patcher inside a plugin folder never loads.** Until 2026-09-30 the deploy put
+  FiresSteamworksPatcher in `BepInEx/plugins/.../patchers/`, so 1.1.1 and 1.1.2 ran
+  without it and only BepInEx's own patcher appeared in the log.
 - The OneDrive folder `My Games/Valheim/winternode` is a hand-kept mirror of the server
   and is not what the server runs. `server.py status` reads the server itself.
