@@ -788,7 +788,8 @@ def bepinex(panel, args):
               "player, then uploads, verifies and starts it.")
         return 0
 
-    before = sorted(LOADING.findall(panel.read_text(LOG)))
+    text = panel.read_text(LOG)
+    before, patched = LOADING.findall(text), PATCHER.findall(text)
     was = panel.power_state()
     print("server is %s" % was)
     total = sum(len(t["files"]) for t in targets)
@@ -850,6 +851,9 @@ def bepinex(panel, args):
         failures += 1
     print("%d of %d plugins that loaded before loaded again"
           % (len(set(before) & set(after)), len(set(before))))
+    for lost in sorted(set(patched) - set(PATCHER.findall(text))):
+        print("FAIL  patcher %s loaded before the update and not after" % lost)
+        failures += 1
     progress.begin("check")
     failures += check_launch(panel, text, folders, args.archive, progress)
     progress.end()

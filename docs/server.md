@@ -69,8 +69,8 @@ The installed version is the one the last launch printed in `User is running
 BepInExPack Valheim version ...`. A downgrade is refused without `--allow-downgrade`.
 `--apply` stops the server, uploads, compares every file's bytes and starts it. The
 launch passes when it prints the new pack version, every plugin that loaded before
-the update loads again, and `check_log.py --server` passes for each `potto007-`
-plugin.
+the update loads again, every patcher that loaded before loads again, and
+`check_log.py --server` passes for each `potto007-` plugin.
 
 Do not use the panel's Reinstall to update the pack. The egg's install script fetches
 the latest pack, but it also runs `rm -rf /mnt/server/BepInEx/plugins/*` and copies the
@@ -78,7 +78,10 @@ pack's whole tree, `BepInEx.cfg` included, over the server root.
 
 On 2026-10-06 a dry run of 5.4.2351 against the server on 5.4.2350 planned 8 uploads
 and 4 deletes (stale `.pdb` files in `core`), and a ConfigurationManager zip was
-refused. `--apply` has not run.
+refused. The same day `--apply` shipped it: it uploaded and verified the files, and
+the launch confirmed at 01:50:46 UTC printed `BepInExPack Valheim version 5.4.2351`.
+All 9 plugins and both patchers loaded again, and `config diff` stayed clean.
+The patcher comparison was added after that run.
 
 ## Progress in the work band
 

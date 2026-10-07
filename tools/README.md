@@ -161,8 +161,8 @@ was clean afterwards. `push --restart` has not run.
 `bepinex <zip>` updates BepInEx itself from a `BepInExPack_Valheim` zip: the
 `BepInEx/core` files, `doorstop_libs/libdoorstop_x64.so` and the pack's notes, never
 `BepInEx/config`. On 2026-10-06 a dry run of 5.4.2351 planned the expected 8 uploads
-and 4 deletes, and a zip that is not the pack was refused with exit 1. `--apply` has
-not run.
+and 4 deletes, and a zip that is not the pack was refused with exit 1. `--apply` then
+shipped it, and the launch ran 5.4.2351 with all 9 plugins loaded again.
 `../docs/server.md` has the workflow and what the API really does.
 
 ## check_config_names.py
