@@ -157,6 +157,12 @@ compares it setting by setting. Validated without writing to the server:
 On 2026-09-13 `push --apply` toggled OttoBifrost's `LogPerformance` on and off on the
 running server. Its `Perf` log lines started and stopped with no restart, and `diff`
 was clean afterwards. `push --restart` has not run.
+
+`bepinex <zip>` updates BepInEx itself from a `BepInExPack_Valheim` zip: the
+`BepInEx/core` files, `doorstop_libs/libdoorstop_x64.so` and the pack's notes, never
+`BepInEx/config`. On 2026-10-06 a dry run of 5.4.2351 planned the expected 8 uploads
+and 4 deletes, and a zip that is not the pack was refused with exit 1. `--apply` has
+not run.
 `../docs/server.md` has the workflow and what the API really does.
 
 ## check_config_names.py

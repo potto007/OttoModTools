@@ -16,6 +16,14 @@ WISP_TOKEN when that is set. The key is never printed.
                            delete the files the package does not hold, compare every
                            file's bytes with the package, start the server, wait for
                            the launch, check it
+  bepinex <zip> [--apply] [--allow-downgrade] [--archive DIR] [--progress LOG]
+                           update BepInEx itself from a BepInExPack_Valheim zip. Without
+                           --apply, the plan. With it: stop the server, upload the
+                           changed BepInEx/core, doorstop_libs/libdoorstop_x64.so and
+                           pack notes, delete core files the pack dropped, compare every
+                           file's bytes, start the server, and check the launch runs
+                           the new pack and loads every plugin it loaded before.
+                           BepInEx/config is never touched
   restart [--archive DIR] [--progress LOG]
                            restart, wait for the launch, check it
   start [--archive DIR] [--progress LOG]
@@ -91,6 +99,12 @@ PACKAGE = re.compile(r"^(?P<folder>[^-]+-(?P<name>.+))-(?P<version>\d+\.\d+\.\d+
 # Unity stamps this line in UTC.
 CONNECTED = re.compile(r"(\d\d/\d\d/\d{4} \d\d:\d\d:\d\d): Game server connected")
 LOADING = re.compile(r"\[Info\s*:\s*BepInEx\] Loading \[([^\]]+)\]")
+PACK_VERSION = re.compile(r"User is running BepInExPack Valheim version (\S+)")
+CORE = "/BepInEx/core"
+# Inside a BepInExPack_Valheim zip, the files a mod manager copies into the game.
+PACK_ROOT = "BepInExPack_Valheim/"
+PACK_LIBS = ("doorstop_libs/libdoorstop_x64.so",)
+PACK_NOTES = (".doorstop_version", "changelog.txt")
 PATCHER = re.compile(r"\] Loaded \d+ patcher methods? from \[([^\]]+)\]")
 SKEW = datetime.timedelta(seconds=10)
 OFFLINE_GRACE = 90
@@ -649,6 +663,200 @@ def deploy(panel, args):
     return 1 if failures else 0
 
 
+def pack_placements(package):
+    """{server directory: {path in it: bytes}} for the files of a BepInExPack_Valheim
+    zip the server runs, and the paths left out.
+
+    The egg's startup sets the doorstop variables itself and preloads
+    doorstop_libs/libdoorstop_x64.so, which loads BepInEx/core. So only those, and the
+    pack's notes beside them, are placed. BepInEx/config stays the config repo's, and
+    the Windows and macOS files and the start scripts are never run here."""
+    found, skipped = {}, []
+    for path, data in sorted(package.items()):
+        rel = path[len(PACK_ROOT):] if path.startswith(PACK_ROOT) else None
+        if rel is not None and rel.startswith("BepInEx/core/"):
+            found.setdefault(CORE, {})[rel[len("BepInEx/core/"):]] = data
+        elif rel in PACK_LIBS:
+            found.setdefault("/doorstop_libs", {})[os.path.basename(rel)] = data
+        elif rel in PACK_NOTES or path in ("CHANGELOG.md", "README.md"):
+            found.setdefault("/", {})[os.path.basename(path)] = data
+        else:
+            skipped.append(path)
+    return found, skipped
+
+
+def pack_version(text):
+    found = PACK_VERSION.search(text)
+    return found.group(1) if found else None
+
+
+def server_sizes(panel, directory):
+    """{name: size} for the files directly in directory: the server root holds the
+    whole Valheim install, so it is never walked."""
+    return {e["name"]: e["size"] for e in panel.listdir(directory) or []
+            if e["type"] != "directory"}
+
+
+def pack_plan(panel, zip_path, allow_downgrade):
+    problems = []
+    with zipfile.ZipFile(zip_path) as archive:
+        package = {i.filename.replace("\\", "/"): archive.read(i)
+                   for i in archive.infolist() if not i.is_dir()}
+    manifest = json.loads(package.get("manifest.json", b"{}").decode("utf-8-sig"))
+    version = manifest.get("version_number")
+    if manifest.get("name") != "BepInExPack_Valheim" or not version:
+        return {"problems": ["MANIFEST   manifest.json names %s %s, not BepInExPack_Valheim"
+                             % (manifest.get("name"), version)]}
+    found, skipped = pack_placements(package)
+    if "BepInEx.Preloader.dll" not in found.get(CORE, {}) or \
+            "libdoorstop_x64.so" not in found.get("/doorstop_libs", {}):
+        return {"problems": ["LAYOUT     no %sBepInEx/core/BepInEx.Preloader.dll or "
+                             "doorstop_libs/libdoorstop_x64.so in the zip" % PACK_ROOT]}
+
+    current = pack_version(panel.read_text(LOG))
+    if current and re.fullmatch(r"\d+(\.\d+)*", current) and not allow_downgrade and \
+            version_key(version) < version_key(current):
+        problems.append("DOWNGRADE  the server runs %s, the package is %s. Pass "
+                        "--allow-downgrade to replace it anyway" % (current, version))
+    print("BepInExPack_Valheim: server %s -> package %s" % (current or "unknown", version))
+
+    targets = []
+    for directory, files in sorted(found.items()):
+        # BepInEx/core belongs to the pack, so a file the new version dropped goes.
+        sizes = (panel.walk(directory) or {}) if directory == CORE else \
+            server_sizes(panel, directory)
+        changed = {}
+        for name, data in sorted(files.items()):
+            path = directory.rstrip("/") + "/" + name
+            if name not in sizes:
+                kind = "NEW"
+            elif sizes[name] != len(data):
+                kind = "UPDATE"
+            else:
+                kind = "UPDATE" if sha(panel.download(path)) != sha(data) else None
+            if kind:
+                changed[name] = data
+                print("  %-7s %s" % (kind, path))
+        extras = sorted(set(sizes) - set(files)) if directory == CORE else []
+        for extra in extras:
+            print("  DELETE  %s/%s" % (directory, extra))
+        print("  %d of %d files in %s already match" % (len(files) - len(changed),
+                                                       len(files), directory))
+        targets.append({"folder": directory, "files": files, "changed": changed,
+                        "extras": extras})
+    for path in skipped:
+        print("  SKIP    %s" % path)
+    return {"version": version, "targets": targets, "problems": problems}
+
+
+def verify_pack(panel, targets, progress=NO_PROGRESS):
+    problems = []
+    for target in targets:
+        directory = target["folder"]
+        if directory == CORE:
+            problems += verify_folder(panel, directory, target["files"], progress)
+            continue
+        sizes = server_sizes(panel, directory)
+        for name, data in sorted(target["files"].items()):
+            progress.advance(name)
+            path = directory.rstrip("/") + "/" + name
+            if name not in sizes:
+                problems.append("MISSING    %s" % path)
+            elif sizes[name] != len(data) or sha(panel.download(path)) != sha(data):
+                problems.append("CONTENT    %s differs from the package" % path)
+    return problems
+
+
+def bepinex(panel, args):
+    """Replace the server's BepInEx core and doorstop with a BepInExPack_Valheim zip's,
+    then check that the launch runs the new pack and loads every plugin it loaded
+    before."""
+    print("=============== %s" % os.path.basename(args.zip))
+    result = pack_plan(panel, args.zip, args.allow_downgrade)
+    for problem in result["problems"]:
+        print(problem)
+    if result["problems"]:
+        print("BEPINEX REFUSED")
+        return 1
+    targets = result["targets"]
+    count = sum(len(t["changed"]) for t in targets)
+    if not count and not any(t["extras"] for t in targets):
+        print("BEPINEX PASSED: the server already holds this pack, nothing to do")
+        return 0
+    if not args.apply:
+        print("dry run, nothing changed. --apply stops the server, which disconnects every "
+              "player, then uploads, verifies and starts it.")
+        return 0
+
+    before = sorted(LOADING.findall(panel.read_text(LOG)))
+    was = panel.power_state()
+    print("server is %s" % was)
+    total = sum(len(t["files"]) for t in targets)
+    folders = potto_folders(panel)
+    progress = Progress(args.progress, args.label or "%s BepInEx" % LABEL,
+                        ([("stop", "stop", 1)] if was != "offline" else [])
+                        + [("upload", "file", count), ("verify", "file", total)]
+                        + ([("launch", "start", 1), ("check", "check", len(folders))]
+                           if was != "offline" else []))
+    if was != "offline":
+        progress.begin("stop", "power " + str(was))
+        panel.signal("stop")
+        if not wait_state(panel, "offline", STOP_TIMEOUT, progress):
+            print("BEPINEX FAILED: the server did not stop within %d s, nothing uploaded"
+                  % STOP_TIMEOUT)
+            return 1
+        progress.end()
+
+    progress.begin("upload")
+    for target in targets:
+        folder = target["folder"].rstrip("/")
+        panel.upload([((folder + "/" + os.path.dirname(name)).rstrip("/") or "/",
+                       os.path.basename(name), data)
+                      for name, data in target["changed"].items()], progress.advance)
+        if target["extras"]:
+            panel.delete([folder + "/" + name for name in target["extras"]])
+    progress.end()
+    progress.begin("verify")
+    problems = verify_pack(panel, targets, progress)
+    progress.end()
+    for problem in problems:
+        print(problem)
+    if problems:
+        print("BEPINEX FAILED: %d problems. The server is left stopped so it cannot launch "
+              "a half-written BepInEx; rerun, or start it with server.py start"
+              % len(problems))
+        return 1
+    print("uploaded and verified byte for byte: BepInExPack_Valheim %s" % result["version"])
+
+    if was == "offline":
+        print("BEPINEX PASSED: the server was offline before, so it was not started")
+        return 0
+    progress.begin("launch")
+    text = wait_launch(panel, panel.signal("start"), progress)
+    if text is None:
+        return 1
+    progress.end()
+    failures = 0
+    running = pack_version(text)
+    if running != result["version"]:
+        print("FAIL  the launch runs BepInExPack %s, expected %s"
+              % (running or "unknown", result["version"]))
+        failures += 1
+    else:
+        print("RUNNING    BepInExPack Valheim %s" % running)
+    after = LOADING.findall(text)
+    for lost in sorted(set(before) - set(after)):
+        print("FAIL  %s loaded before the update and not after" % lost)
+        failures += 1
+    print("%d of %d plugins that loaded before loaded again"
+          % (len(set(before) & set(after)), len(set(before))))
+    progress.begin("check")
+    failures += check_launch(panel, text, folders, args.archive, progress)
+    progress.end()
+    print("BEPINEX %s" % ("PASSED" if not failures else "FAILED: %d problems" % failures))
+    return 1 if failures else 0
+
+
 def launch(panel, signal, archive, progress_log=None, label=None):
     folders = potto_folders(panel)
     progress = Progress(progress_log, label or "%s %s" % (LABEL, signal),
@@ -859,7 +1067,12 @@ def main():
     deploying.add_argument("--apply", action="store_true")
     deploying.add_argument("--allow-downgrade", action="store_true")
     deploying.add_argument("--archive", default=None)
-    for name in ("restart", "start", "stop", "deploy"):
+    packing = sub.add_parser("bepinex")
+    packing.add_argument("zip")
+    packing.add_argument("--apply", action="store_true")
+    packing.add_argument("--allow-downgrade", action="store_true")
+    packing.add_argument("--archive", default=None)
+    for name in ("restart", "start", "stop", "deploy", "bepinex"):
         sub.choices[name].add_argument("--progress", default=None, metavar="LOG")
         sub.choices[name].add_argument("--label", default=None)
     args = parser.parse_args()
@@ -884,6 +1097,8 @@ def main():
             return 1 if failures else 0
         if args.command == "deploy":
             return deploy(panel, args)
+        if args.command == "bepinex":
+            return bepinex(panel, args)
         if args.command == "stop":
             progress = Progress(args.progress, args.label or "%s stop" % LABEL,
                                 [("stop", "stop", 1)])

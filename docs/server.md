@@ -12,6 +12,7 @@ python3 $TOOLS/server.py status
 python3 $TOOLS/server.py deploy ../OttoBifrost/Thunderstore/potto007-OttoBifrost-1.3.0.zip
 python3 $TOOLS/server.py deploy ../OttoBifrost/Thunderstore/potto007-OttoBifrost-1.3.0.zip --apply
 python3 $TOOLS/server.py restart
+python3 $TOOLS/server.py bepinex BepInExPack_Valheim-5.4.2351.zip
 python3 $TOOLS/server.py log --archive ~/valheim-logs/server
 ```
 
@@ -43,6 +44,41 @@ python3 $TOOLS/server.py log --archive ~/valheim-logs/server
 
 Every command ends with a verdict line (`DEPLOY PASSED`, `LAUNCH FAILED`,
 `LOG PASSED`) and exits non-zero on failure.
+
+## Updating BepInEx
+
+`deploy` installs into `BepInEx/plugins/<namespace>-<name>`, so it cannot update
+BepInEx itself. `server.py bepinex <zip>` takes a `denikson-BepInExPack_Valheim` zip
+from Thunderstore instead, a dry run until `--apply`:
+
+```
+python3 $TOOLS/server.py bepinex BepInExPack_Valheim-5.4.2351.zip
+python3 $TOOLS/server.py bepinex BepInExPack_Valheim-5.4.2351.zip --apply
+```
+
+The egg's startup sets the doorstop variables itself and preloads
+`doorstop_libs/libdoorstop_x64.so`, which loads `BepInEx/core`. Those are all the
+command places, with the pack's notes beside them (`.doorstop_version`,
+`changelog.txt`, `CHANGELOG.md`, `README.md` at the server root). The plan lists every
+file as `NEW`, `UPDATE` or `SKIP`, uploads only those that differ by hash, and deletes
+files in `BepInEx/core` the new pack no longer holds. `BepInEx/config/BepInEx.cfg`,
+`winhttp.dll`, `doorstop_config.ini`, the macOS library and the start scripts are
+skipped: the config repo owns the first, and the server never runs the rest.
+
+The installed version is the one the last launch printed in `User is running
+BepInExPack Valheim version ...`. A downgrade is refused without `--allow-downgrade`.
+`--apply` stops the server, uploads, compares every file's bytes and starts it. The
+launch passes when it prints the new pack version, every plugin that loaded before
+the update loads again, and `check_log.py --server` passes for each `potto007-`
+plugin.
+
+Do not use the panel's Reinstall to update the pack. The egg's install script fetches
+the latest pack, but it also runs `rm -rf /mnt/server/BepInEx/plugins/*` and copies the
+pack's whole tree, `BepInEx.cfg` included, over the server root.
+
+On 2026-10-06 a dry run of 5.4.2351 against the server on 5.4.2350 planned 8 uploads
+and 4 deletes (stale `.pdb` files in `core`), and a ConfigurationManager zip was
+refused. `--apply` has not run.
 
 ## Progress in the work band
 
